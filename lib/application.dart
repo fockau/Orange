@@ -15,13 +15,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'controller.dart';
-import 'pages/pages.dart';
 import 'xboard/xboard.dart';
 import 'package:flutter_xboard_sdk/flutter_xboard_sdk.dart';
-import 'package:fl_clash/xboard/adapter/initialization/sdk_provider.dart';
-import 'package:fl_clash/xboard/features/online_support/providers/websocket_auto_connector.dart';
 import 'package:fl_clash/xboard/router/app_router.dart' as xboard_router;
-import 'package:fl_clash/xboard/features/auth/auth.dart';
+import 'package:fl_clash/xboard/features/initialization/initialization.dart';
 
 class Application extends ConsumerStatefulWidget {
   const Application({
@@ -59,9 +56,16 @@ class ApplicationState extends ConsumerState<Application> {
     _autoUpdateProfilesTask();
     globalState.appController = AppController(context, ref);
     
-    // 预热 XBoard SDK（后台异步初始化，不阻塞UI）
-    // SDK 会进行域名竞速、加载证书、配置 HTTP 服务
-    Future.microtask(() => ref.read(xboardSdkProvider.future));
+    // ✅ 后台预热：统一初始化服务（不阻塞 UI）
+    // 这样快速认证和登录页都能使用已初始化的 SDK
+    Future.microtask(() async {
+      try {
+        await ref.read(initializationProvider.notifier).initialize();
+      } catch (e) {
+        // 初始化失败，登录页会处理
+        debugPrint('[Application] 预热初始化失败: $e');
+      }
+    });
     
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
       final currentContext = globalState.navigatorKey.currentContext;
@@ -72,7 +76,7 @@ class ApplicationState extends ConsumerState<Application> {
       globalState.appController.initLink();
       app?.initShortcuts();
       
-      // 使用新的域名服务架构，简化认证检查
+      // ✅ 等待初始化完成后再执行快速认证
       _performQuickAuthWithDomainService();
       
       // 启动后检查更新
@@ -83,23 +87,40 @@ class ApplicationState extends ConsumerState<Application> {
 
   /// 使用新域名服务架构进行快速认证检查
   void _performQuickAuthWithDomainService() {
-    // 立即检查token存在性，不延迟
+    // 等待初始化完成后再检查
     Future.microtask(() async {
       try {
-        print('[Application] 开始快速认证检查...');
+        debugPrint('[Application] 开始快速认证检查...');
         
-        // SDK 已在 main.dart 中初始化并完成域名竞速，直接使用即可
+        // ✅ 等待初始化完成
+        final initState = ref.read(initializationProvider);
+        if (!initState.isReady) {
+          debugPrint('[Application] 等待初始化完成...');
+          // 等待初始化完成（最多 30 秒）
+          final deadline = DateTime.now().add(const Duration(seconds: 30));
+          while (!ref.read(initializationProvider).isReady && 
+                 DateTime.now().isBefore(deadline)) {
+            await Future.delayed(const Duration(milliseconds: 500));
+          }
+          
+          if (!ref.read(initializationProvider).isReady) {
+            debugPrint('[Application] 初始化超时，跳过快速认证');
+            return;
+          }
+        }
+        
+        // SDK 已初始化，执行快速认证
         final userNotifier = ref.read(xboardUserProvider.notifier);
         await userNotifier.quickAuth();
         
-        // 强制刷新UI，确保_AppHomeRouter能够响应最新的认证状态
+        // 强制刷新UI，确保路由能够响应最新的认证状态
         if (mounted) {
           setState(() {});
         }
         
-        print('[Application] 快速认证检查完成');
+        debugPrint('[Application] 快速认证检查完成');
       } catch (e) {
-        print('[Application] 快速认证检查失败: $e');
+        debugPrint('[Application] 快速认证检查失败: $e');
         // 即使认证检查失败，也要确保UI能正常显示
         if (mounted) {
           setState(() {});

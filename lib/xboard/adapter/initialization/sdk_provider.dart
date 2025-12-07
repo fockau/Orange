@@ -12,21 +12,29 @@ final _logger = FileLogger('sdk_provider');
 /// XBoard SDK Provider
 /// 
 /// 负责SDK的初始化和生命周期管理
-/// - 自动域名竞速
+/// - 等待 InitializationProvider 完成域名检查
+/// - 使用已缓存的域名竞速结果
 /// - 自动加载HTTP配置
 /// - 缓存SDK实例
+/// 
+/// 注意：不要直接调用此 Provider，应该通过 InitializationProvider.initialize() 触发初始化
 @Riverpod(keepAlive: true)
 Future<XBoardSDK> xboardSdk(Ref ref) async {
   try {
     _logger.info('[XBoardSdkProvider] 开始初始化SDK');
     
-    // 1. 域名竞速选择最快的URL
-    String? fastestUrl;
-    if (XBoardConfig.lastRacingResult?.domain != null) {
-      fastestUrl = XBoardConfig.lastRacingResult!.domain;
+    // 1. 优先使用已缓存的域名竞速结果
+    // InitializationProvider 会确保域名检查完成后才调用此 Provider
+    String? fastestUrl = XBoardConfig.lastRacingResult?.domain;
+    
+    if (fastestUrl != null) {
       _logger.info('[XBoardSdkProvider] 使用缓存的竞速结果: $fastestUrl');
     } else {
-      _logger.info('[XBoardSdkProvider] 开始域名竞速...');
+      // 如果没有缓存，说明没有通过 InitializationProvider 初始化
+      // 作为降级方案，自己执行域名竞速
+      _logger.warning('[XBoardSdkProvider] ⚠️ 缓存未命中，执行降级方案：自行竞速');
+      _logger.warning('[XBoardSdkProvider] 建议通过 InitializationProvider.initialize() 触发初始化');
+      
       fastestUrl = await XBoardConfig.getFastestPanelUrl();
     }
     
@@ -34,7 +42,7 @@ Future<XBoardSDK> xboardSdk(Ref ref) async {
       throw Exception('域名竞速失败：所有面板域名都无法连接');
     }
     
-    _logger.info('[XBoardSdkProvider] 域名竞速完成: $fastestUrl');
+    _logger.info('[XBoardSdkProvider] 使用域名: $fastestUrl');
     
     // 2. 获取面板类型（通过provider接口）
     final panelType = XBoardConfig.provider.getPanelType();

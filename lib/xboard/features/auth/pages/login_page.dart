@@ -1,7 +1,7 @@
 
 import 'package:fl_clash/xboard/services/services.dart';
 import 'package:fl_clash/xboard/features/auth/providers/xboard_user_provider.dart';
-import 'package:fl_clash/xboard/features/domain_status/domain_status.dart';
+import 'package:fl_clash/xboard/features/initialization/initialization.dart';
 import 'package:fl_clash/common/common.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,8 +33,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     super.initState();
     _storageService = ref.read(storageServiceProvider);
     _loadSavedCredentials();
-    _checkDomainStatus();
     _loadAppInfo();
+    
+    // ✅ 调用统一初始化服务
+    _initializeXBoard();
   }
   
   /// 加载应用信息（标题和网站）
@@ -54,9 +56,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     _passwordController.dispose();
     super.dispose();
   }
-  Future<void> _checkDomainStatus() async {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(domainStatusProvider.notifier).checkDomain();
+  
+  /// 初始化 XBoard（统一入口）
+  Future<void> _initializeXBoard() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await ref.read(initializationProvider.notifier).initialize();
+      } catch (e) {
+        // 初始化失败，UI 会显示错误状态
+      }
     });
   }
   void refreshCredentials() {
@@ -126,20 +134,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       MaterialPageRoute(builder: (context) => const RegisterPage()),
     );
     _loadSavedCredentials();
-    _checkDomainStatus();
+    _initializeXBoard(); // 重新初始化
   }
   
   void _navigateToForgotPassword() async {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => const ForgotPasswordPage()),
     );
-    _checkDomainStatus();
+    _initializeXBoard(); // 重新初始化
   }
     @override
     Widget build(BuildContext context) {
       final colorScheme = Theme.of(context).colorScheme;
       final textTheme = Theme.of(context).textTheme;
-      final domainStatus = ref.watch(domainStatusProvider);
+      final initState = ref.watch(initializationProvider);
       final userState = ref.watch(xboardUserProvider);
   
       return Scaffold(
@@ -149,12 +157,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           actions: [
             const LanguageSelector(),
             const SizedBox(width: 8),
+            // ✅ 显示初始化状态指示器
             Padding(
               padding: const EdgeInsets.only(right: 16.0),
-              child: GestureDetector(
-                onTap: () => showDomainStatusDialog(context),
-                child: const DomainStatusIndicator(),
-              ),
+              child: _buildInitializationIndicator(initState),
             ),
           ],
         ),
@@ -290,7 +296,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       SizedBox(
                         height: 48,
                         child: FilledButton(
-                          onPressed: domainStatus.isReady && !userState.isLoading ? _login : null,
+                          onPressed: initState.isReady && !userState.isLoading ? _login : null,
                           child: userState.isLoading
                               ? const SizedBox(
                                   width: 20,
@@ -326,4 +332,51 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           ),
         ),
       );
-    }}
+    }
+    
+    /// 构建初始化状态指示器
+    Widget _buildInitializationIndicator(InitializationState initState) {
+      Color statusColor;
+      IconData statusIcon;
+      
+      switch (initState.status) {
+        case InitializationStatus.checkingDomain:
+        case InitializationStatus.initializingSDK:
+          statusColor = Colors.orange;
+          statusIcon = Icons.sync;
+          break;
+        case InitializationStatus.ready:
+          statusColor = Colors.green;
+          statusIcon = Icons.check_circle;
+          break;
+        case InitializationStatus.failed:
+          statusColor = Colors.red;
+          statusIcon = Icons.error;
+          break;
+        case InitializationStatus.idle:
+          statusColor = Colors.grey;
+          statusIcon = Icons.dns;
+          break;
+      }
+      
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          initState.isInitializing
+              ? SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(statusColor),
+                  ),
+                )
+              : Icon(
+                  statusIcon,
+                  size: 12,
+                  color: statusColor,
+                ),
+        ],
+      );
+    }
+  }
